@@ -22,10 +22,13 @@ export const ALLOWED_CHAT_ID =
 export const WHATSAPP_ENABLED =
   (process.env.WHATSAPP_ENABLED || envConfig.WHATSAPP_ENABLED || '').toLowerCase() === 'true';
 
-// Voice — read via readEnvFile, not process.env
-export const GROQ_API_KEY = envConfig.GROQ_API_KEY ?? '';
-export const ELEVENLABS_API_KEY = envConfig.ELEVENLABS_API_KEY ?? '';
-export const ELEVENLABS_VOICE_ID = envConfig.ELEVENLABS_VOICE_ID ?? '';
+// Voice and integrations: process.env first (global env), then env file(s)
+export const GROQ_API_KEY =
+  (process.env.GROQ_API_KEY || envConfig.GROQ_API_KEY) ?? '';
+export const ELEVENLABS_API_KEY =
+  (process.env.ELEVENLABS_API_KEY || envConfig.ELEVENLABS_API_KEY) ?? '';
+export const ELEVENLABS_VOICE_ID =
+  (process.env.ELEVENLABS_VOICE_ID || envConfig.ELEVENLABS_VOICE_ID) ?? '';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

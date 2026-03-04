@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { readEnvFile } from './env.js';
+import * as envModule from './env.js';
 
 const TMP_DIR = '/tmp/claudeclaw-env-test';
 const TMP_ENV = path.join(TMP_DIR, '.env');
+const TMP_GLOBAL = path.join(TMP_DIR, '.claudeclaw-env');
 
 function writeEnv(content: string): void {
   fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -29,51 +30,58 @@ describe('readEnvFile', () => {
     vi.spyOn(process, 'cwd').mockReturnValue(TMP_DIR);
   }
 
+  function mockGlobalPath(): void {
+    vi.spyOn(envModule, 'getGlobalEnvPath').mockReturnValue(TMP_GLOBAL);
+  }
+
+  beforeEach(() => mockGlobalPath());
+
   it('parses KEY=value correctly', () => {
     writeEnv('FOO=bar\nBAZ=qux\n');
     mockCwd();
-    const result = readEnvFile(['FOO', 'BAZ']);
+
+    const result = envModule.readEnvFile(['FOO', 'BAZ']);
     expect(result).toEqual({ FOO: 'bar', BAZ: 'qux' });
   });
 
   it('handles double-quoted values', () => {
     writeEnv('GREETING="hello world"\n');
     mockCwd();
-    const result = readEnvFile(['GREETING']);
+    const result = envModule.readEnvFile(['GREETING']);
     expect(result).toEqual({ GREETING: 'hello world' });
   });
 
   it('handles single-quoted values', () => {
     writeEnv("NAME='John Doe'\n");
     mockCwd();
-    const result = readEnvFile(['NAME']);
+    const result = envModule.readEnvFile(['NAME']);
     expect(result).toEqual({ NAME: 'John Doe' });
   });
 
   it('ignores comment lines', () => {
     writeEnv('# This is a comment\nKEY=value\n# Another comment\n');
     mockCwd();
-    const result = readEnvFile(['KEY']);
+    const result = envModule.readEnvFile(['KEY']);
     expect(result).toEqual({ KEY: 'value' });
   });
 
   it('ignores blank lines', () => {
     writeEnv('\n\nKEY=value\n\n\n');
     mockCwd();
-    const result = readEnvFile(['KEY']);
+    const result = envModule.readEnvFile(['KEY']);
     expect(result).toEqual({ KEY: 'value' });
   });
 
   it('returns empty object if .env does not exist', () => {
     vi.spyOn(process, 'cwd').mockReturnValue('/tmp/nonexistent-dir-xyz');
-    const result = readEnvFile(['FOO']);
+    const result = envModule.readEnvFile(['FOO']);
     expect(result).toEqual({});
   });
 
   it('only returns requested keys', () => {
     writeEnv('A=1\nB=2\nC=3\n');
     mockCwd();
-    const result = readEnvFile(['A', 'C']);
+    const result = envModule.readEnvFile(['A', 'C']);
     expect(result).toEqual({ A: '1', C: '3' });
     expect(result).not.toHaveProperty('B');
   });
@@ -81,21 +89,21 @@ describe('readEnvFile', () => {
   it('strips surrounding whitespace from keys and values', () => {
     writeEnv('  MY_KEY  =  my_value  \n');
     mockCwd();
-    const result = readEnvFile(['MY_KEY']);
+    const result = envModule.readEnvFile(['MY_KEY']);
     expect(result).toEqual({ MY_KEY: 'my_value' });
   });
 
   it('handles values containing = sign', () => {
     writeEnv('URL=https://example.com?a=1&b=2\n');
     mockCwd();
-    const result = readEnvFile(['URL']);
+    const result = envModule.readEnvFile(['URL']);
     expect(result).toEqual({ URL: 'https://example.com?a=1&b=2' });
   });
 
   it('skips lines without = sign', () => {
     writeEnv('NOEQUALS\nKEY=value\n');
     mockCwd();
-    const result = readEnvFile(['KEY', 'NOEQUALS']);
+    const result = envModule.readEnvFile(['KEY', 'NOEQUALS']);
     expect(result).toEqual({ KEY: 'value' });
   });
 });

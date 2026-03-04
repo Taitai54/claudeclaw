@@ -127,6 +127,18 @@ or just start talking. Claude Code is running on your machine — it has access 
 
 ---
 
+### Optional — Same keys from any clone or device
+
+Secrets are read from **project `.env`** first, then from **`~/.claudeclaw-env`** (global). So you can:
+
+- Put keys in **`~/.claudeclaw-env`** once and use any clone without a local `.env`
+- Copy that file to another machine so the bot works there with the same keys
+- Run `npm run sync-global-env` to copy the current project `.env` into `~/.claudeclaw-env` (e.g. after adding a new key)
+
+Do not commit `~/.claudeclaw-env` to git; keep it only in your user profile or sync it privately.
+
+---
+
 ### Step 7 — Run as a background service
 
 You probably want ClaudeClaw running automatically, not manually in a terminal.
@@ -723,6 +735,7 @@ claudeclaw/
 ├── CLAUDE.md             ← START HERE: your assistant's personality and context
 ├── banner.txt            ← ASCII art shown on startup — edit or replace freely
 ├── .env                  ← Your API keys (created by setup wizard, gitignored)
+│                           Optional: use ~/.claudeclaw-env for same keys everywhere
 │
 │  ← Configuration and setup
 ├── .env.example          Template for .env — shows all available variables
@@ -749,6 +762,7 @@ claudeclaw/
 ├── scripts/
 │   ├── setup.ts          Interactive setup wizard — run with: npm run setup
 │   ├── status.ts         Health check — run with: npm run status
+│   ├── sync-global-env.ts  Copies .env to ~/.claudeclaw-env — npm run sync-global-env
 │   ├── notify.sh         Sends a Telegram message from the shell (used by Claude)
 │   └── wa-daemon.ts      WhatsApp daemon — run separately for WhatsApp bridge
 │

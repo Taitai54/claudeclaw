@@ -40,7 +40,8 @@ Execute. Don't explain what you're about to do — just do it. When Matt asks fo
 - **Tools available**: Bash, file system, web search, browser automation, and all MCP servers configured in Claude settings
 - **This project** lives at the directory where `CLAUDE.md` is located — use `git rev-parse --show-toplevel` to find it if needed
 - **No Obsidian vault** — Matt doesn't use Obsidian
-- **Gemini API key**: stored in this project's `.env` as `GOOGLE_API_KEY` — use this when video understanding is needed. When Matt sends a video file, use the `gemini-api-dev` skill with this key to analyze it.
+- **Secrets (API keys, Telegram token, etc.)**: read from project `.env` then from **`~/.claudeclaw-env`** (global). Use `npm run sync-global-env` to copy project `.env` into `~/.claudeclaw-env` so the same keys work from any clone or device.
+- **Gemini API key**: stored in project `.env` or `~/.claudeclaw-env` as `GOOGLE_API_KEY` — use this when video understanding is needed. When Matt sends a video file, use the `gemini-api-dev` skill with this key to analyze it.
 
 <!-- Add any other tools, directories, or services relevant to your setup here -->
 

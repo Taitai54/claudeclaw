@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "setup": "tsx scripts/setup.ts",
-    "status": "tsx scripts/status.ts"
+    "status": "tsx scripts/status.ts",
+    "sync-global-env": "tsx scripts/sync-global-env.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.34",
