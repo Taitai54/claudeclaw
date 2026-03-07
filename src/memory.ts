@@ -1,3 +1,4 @@
+import { agentObsidianConfig } from './config.js';
 import {
   decayMemories,
   getRecentMemories,
@@ -7,6 +8,7 @@ import {
   searchMemories,
   touchMemory,
 } from './db.js';
+import { buildObsidianContext } from './obsidian.js';
 
 const SEMANTIC_SIGNALS = /\b(my|i am|i'm|i prefer|remember|always|never)\b/i;
 
@@ -42,9 +44,14 @@ export async function buildMemoryContext(
     lines.push(`- ${mem.content} (${mem.sector})`);
   }
 
-  if (lines.length === 0) return '';
+  if (lines.length === 0 && !agentObsidianConfig) return '';
 
-  return `[Memory context]\n${lines.join('\n')}\n[End memory context]`;
+  const memBlock = lines.length > 0
+    ? `[Memory context]\n${lines.join('\n')}\n[End memory context]`
+    : '';
+  const obsidianBlock = buildObsidianContext(agentObsidianConfig);
+
+  return [memBlock, obsidianBlock].filter(Boolean).join('\n\n');
 }
 
 /**

@@ -23,6 +23,7 @@ if (AGENT_ID !== 'main') {
     botToken: agentConfig.botToken,
     cwd: path.join(PROJECT_ROOT, 'agents', AGENT_ID),
     model: agentConfig.model,
+    obsidian: agentConfig.obsidian,
   });
   logger.info({ agentId: AGENT_ID, name: agentConfig.name }, 'Running as agent');
 }

@@ -24,17 +24,20 @@ export let activeBotToken =
   process.env.TELEGRAM_BOT_TOKEN || envConfig.TELEGRAM_BOT_TOKEN || '';
 export let agentCwd: string | undefined; // undefined = use PROJECT_ROOT
 export let agentDefaultModel: string | undefined; // from agent.yaml
+export let agentObsidianConfig: { vault: string; folders: string[]; readOnly?: string[] } | undefined;
 
 export function setAgentOverrides(opts: {
   agentId: string;
   botToken: string;
   cwd: string;
   model?: string;
+  obsidian?: { vault: string; folders: string[]; readOnly?: string[] };
 }): void {
   AGENT_ID = opts.agentId;
   activeBotToken = opts.botToken;
   agentCwd = opts.cwd;
   agentDefaultModel = opts.model;
+  agentObsidianConfig = opts.obsidian;
 }
 
 export const TELEGRAM_BOT_TOKEN =
