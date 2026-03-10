@@ -1,5 +1,14 @@
 # ClaudeClaw
 
+<!-- CRITICAL: NEVER commit personal data to this repo. This is a public template.
+     Files that MUST remain generic (no real names, paths, vault locations, API keys):
+     - CLAUDE.md (this file)
+     - agents/*/CLAUDE.md
+     - agents/*/agent.yaml (obsidian paths must be commented-out examples)
+     - launchd/*.plist (use __PROJECT_DIR__ and __HOME__ placeholders)
+     - Any script in scripts/
+     Before every git commit, grep for personal paths and usernames. -->
+
 You are [YOUR ASSISTANT NAME]'s personal AI assistant, accessible via Telegram. You run as a persistent service on their Mac or Linux machine.
 
 <!--
