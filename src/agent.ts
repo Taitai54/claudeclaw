@@ -1,12 +1,68 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
-import { PROJECT_ROOT } from './config.js';
+import { PROJECT_ROOT, agentCwd } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+
+export interface UsageInfo {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  totalCostUsd: number;
+  /** True if the SDK auto-compacted context during this turn */
+  didCompact: boolean;
+  /** Token count before compaction (if it happened) */
+  preCompactTokens: number | null;
+  /**
+   * The cache_read_input_tokens from the LAST API call in the turn.
+   * Unlike the cumulative cacheReadInputTokens, this reflects the actual
+   * context window size (cumulative overcounts on multi-step tool-use turns).
+   */
+  lastCallCacheRead: number;
+  /**
+   * The input_tokens from the LAST API call in the turn.
+   * This is the actual context window size: system prompt + conversation
+   * history + tool results for that call. Use this for context warnings.
+   */
+  lastCallInputTokens: number;
+}
+
+/** Progress event emitted during agent execution for Telegram feedback. */
+export interface AgentProgressEvent {
+  type: 'task_started' | 'task_completed' | 'tool_active';
+  description: string;
+}
+
+/** Map SDK tool names to human-readable labels. */
+const TOOL_LABELS: Record<string, string> = {
+  Read: 'Reading file',
+  Write: 'Writing file',
+  Edit: 'Editing file',
+  Bash: 'Running command',
+  Grep: 'Searching code',
+  Glob: 'Finding files',
+  WebSearch: 'Web search',
+  WebFetch: 'Fetching page',
+  Agent: 'Sub-agent',
+  NotebookEdit: 'Editing notebook',
+  AskUserQuestion: 'User question',
+};
+
+function toolLabel(toolName: string): string {
+  if (TOOL_LABELS[toolName]) return TOOL_LABELS[toolName];
+  // MCP tools: mcp__server__tool → "server: tool"
+  if (toolName.startsWith('mcp__')) {
+    const parts = toolName.split('__');
+    return parts.length >= 3 ? `${parts[1]}: ${parts.slice(2).join(' ')}` : toolName;
+  }
+  return toolName;
+}
 
 export interface AgentResult {
   text: string | null;
   newSessionId: string | undefined;
+  usage: UsageInfo | null;
+  aborted?: boolean;
 }
 
 /**
@@ -40,14 +96,19 @@ async function* singleTurn(text: string): AsyncGenerator<{
  * No explicit token needed if you're already logged in via `claude login`.
  * Optionally override with CLAUDE_CODE_OAUTH_TOKEN in .env.
  *
- * @param message   The user's text (may include transcribed voice prefix)
- * @param sessionId Claude Code session ID to resume, or undefined for new session
- * @param onTyping  Called every TYPING_REFRESH_MS while waiting — sends typing action to Telegram
+ * @param message    The user's text (may include transcribed voice prefix)
+ * @param sessionId  Claude Code session ID to resume, or undefined for new session
+ * @param onTyping   Called every TYPING_REFRESH_MS while waiting — sends typing action to Telegram
+ * @param onProgress Called when sub-agents start/complete — sends status updates to Telegram
  */
 export async function runAgent(
   message: string,
   sessionId: string | undefined,
   onTyping: () => void,
+  onProgress?: (event: AgentProgressEvent) => void,
+  model?: string,
+  abortController?: AbortController,
+  onStreamText?: (accumulatedText: string) => void,
 ): Promise<AgentResult> {
   // Read secrets from .env without polluting process.env.
   // CLAUDE_CODE_OAUTH_TOKEN is optional — the subprocess finds auth via ~/.claude/
@@ -64,6 +125,12 @@ export async function runAgent(
 
   let newSessionId: string | undefined;
   let resultText: string | null = null;
+  let usage: UsageInfo | null = null;
+  let didCompact = false;
+  let preCompactTokens: number | null = null;
+  let lastCallCacheRead = 0;
+  let lastCallInputTokens = 0;
+  let streamedText = '';
 
   // Refresh typing indicator on an interval while Claude works.
   // Telegram's "typing..." action expires after ~5s.
@@ -78,8 +145,9 @@ export async function runAgent(
     for await (const event of query({
       prompt: singleTurn(message),
       options: {
-        // cwd = claudeclaw project root so Claude Code loads our CLAUDE.md
-        cwd: PROJECT_ROOT,
+        // cwd = agent directory (if running as agent) or project root.
+        // Claude Code loads CLAUDE.md from cwd via settingSources: ['project'].
+        cwd: agentCwd ?? PROJECT_ROOT,
 
         // Resume the previous session for this chat (persistent context)
         resume: sessionId,
@@ -93,6 +161,15 @@ export async function runAgent(
 
         // Pass secrets to the subprocess without polluting our own process.env
         env: sdkEnv,
+
+        // Stream partial text so Telegram can show progressive updates
+        includePartialMessages: !!onStreamText,
+
+        // Model override (e.g. 'claude-haiku-4-5', 'claude-sonnet-4-5')
+        ...(model ? { model } : {}),
+
+        // Abort support — signals the SDK to kill the subprocess
+        ...(abortController ? { abortController } : {}),
       },
     })) {
       const ev = event as Record<string, unknown>;
@@ -102,17 +179,120 @@ export async function runAgent(
         logger.info({ newSessionId }, 'Session initialized');
       }
 
+      // Detect auto-compaction (context window was getting full)
+      if (ev['type'] === 'system' && ev['subtype'] === 'compact_boundary') {
+        didCompact = true;
+        const meta = ev['compact_metadata'] as { trigger: string; pre_tokens: number } | undefined;
+        preCompactTokens = meta?.pre_tokens ?? null;
+        logger.warn(
+          { trigger: meta?.trigger, preCompactTokens },
+          'Context window compacted',
+        );
+      }
+
+      // Track per-call token usage and detect tool use from assistant message events.
+      // Each assistant message represents one API call; its usage reflects
+      // that single call's context size (not cumulative across the turn).
+      if (ev['type'] === 'assistant') {
+        const msg = ev['message'] as Record<string, unknown> | undefined;
+        const msgUsage = msg?.['usage'] as Record<string, number> | undefined;
+        const callCacheRead = msgUsage?.['cache_read_input_tokens'] ?? 0;
+        const callInputTokens = msgUsage?.['input_tokens'] ?? 0;
+        if (callCacheRead > 0) {
+          lastCallCacheRead = callCacheRead;
+        }
+        if (callInputTokens > 0) {
+          lastCallInputTokens = callInputTokens;
+        }
+
+        // Extract tool_use blocks from assistant content for progress reporting
+        if (onProgress) {
+          const content = msg?.['content'] as Array<{ type: string; name?: string }> | undefined;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === 'tool_use' && block.name) {
+                onProgress({ type: 'tool_active', description: toolLabel(block.name) });
+              }
+            }
+          }
+        }
+      }
+
+      // Sub-agent lifecycle events — surface to Telegram for user feedback
+      if (ev['type'] === 'system' && ev['subtype'] === 'task_started' && onProgress) {
+        const desc = (ev['description'] as string) ?? 'Sub-agent started';
+        onProgress({ type: 'task_started', description: desc });
+      }
+      if (ev['type'] === 'system' && ev['subtype'] === 'task_notification' && onProgress) {
+        const summary = (ev['summary'] as string) ?? 'Sub-agent finished';
+        const status = (ev['status'] as string) ?? 'completed';
+        onProgress({
+          type: 'task_completed',
+          description: status === 'failed' ? `Failed: ${summary}` : summary,
+        });
+      }
+
+      // Stream text deltas for progressive Telegram updates.
+      // Only stream the outermost assistant response (parent_tool_use_id === null)
+      // to avoid showing internal tool-use reasoning.
+      if (ev['type'] === 'stream_event' && onStreamText && ev['parent_tool_use_id'] === null) {
+        const streamEvent = ev['event'] as Record<string, unknown> | undefined;
+        if (streamEvent?.['type'] === 'content_block_delta') {
+          const delta = streamEvent['delta'] as Record<string, unknown> | undefined;
+          if (delta?.['type'] === 'text_delta' && typeof delta['text'] === 'string') {
+            streamedText += delta['text'];
+            onStreamText(streamedText);
+          }
+        }
+        if (streamEvent?.['type'] === 'message_start') {
+          streamedText = '';
+        }
+      }
+
       if (ev['type'] === 'result') {
         resultText = (ev['result'] as string | null | undefined) ?? null;
+
+        // Extract usage info from result event
+        const evUsage = ev['usage'] as Record<string, number> | undefined;
+        if (evUsage) {
+          usage = {
+            inputTokens: evUsage['input_tokens'] ?? 0,
+            outputTokens: evUsage['output_tokens'] ?? 0,
+            cacheReadInputTokens: evUsage['cache_read_input_tokens'] ?? 0,
+            totalCostUsd: (ev['total_cost_usd'] as number) ?? 0,
+            didCompact,
+            preCompactTokens,
+            lastCallCacheRead,
+            lastCallInputTokens,
+          };
+          logger.info(
+            {
+              inputTokens: usage.inputTokens,
+              cacheReadTokens: usage.cacheReadInputTokens,
+              lastCallCacheRead: usage.lastCallCacheRead,
+              lastCallInputTokens: usage.lastCallInputTokens,
+              costUsd: usage.totalCostUsd,
+              didCompact,
+            },
+            'Turn usage',
+          );
+        }
+
         logger.info(
           { hasResult: !!resultText, subtype: ev['subtype'] },
           'Agent result received',
         );
       }
     }
+  } catch (err) {
+    if (abortController?.signal.aborted) {
+      logger.info('Agent query aborted by user');
+      return { text: null, newSessionId, usage, aborted: true };
+    }
+    throw err;
   } finally {
     clearInterval(typingInterval);
   }
 
-  return { text: resultText, newSessionId };
+  return { text: resultText, newSessionId, usage };
 }
