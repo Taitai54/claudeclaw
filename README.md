@@ -1181,6 +1181,22 @@ npm run typecheck # Type-check without compiling
 
 ---
 
+## Mac launcher (optional)
+
+To start ClaudeClaw by double-clicking instead of using the terminal:
+
+1. **Double-click** `Start ClaudeClaw.command` in the project folder.  
+   It will install deps and build if needed, then start the bot. The Terminal window stays open so you can see logs; press Ctrl+C to stop.
+
+2. **Optional — custom icon:**  
+   - Open `assets/ClaudeClaw-Icon.png` in Preview.  
+   - Select All (Cmd+A), Copy (Cmd+C).  
+   - In Finder, select `Start ClaudeClaw.command`, press Cmd+I (Get Info).  
+   - Click the small icon at the top left of the Info window, then paste (Cmd+V).  
+   - You can drag `Start ClaudeClaw.command` to the Dock for one-click launch.
+
+---
+
 ## Is this compliant with Anthropic's Terms of Service?
 
 **Yes.** On February 19, 2026, Anthropic published their [Legal and Compliance page](https://docs.anthropic.com/en/docs/legal-and-compliance) banning OAuth tokens in third-party tools. ClaudeClaw is not affected.
