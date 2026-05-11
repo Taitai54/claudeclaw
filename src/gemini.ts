@@ -4,6 +4,11 @@ import { GOOGLE_API_KEY } from './config.js';
 import { logger } from './logger.js';
 
 let client: GoogleGenAI | null = null;
+let warnedAboutMissingKey = false;
+
+export function isGeminiAvailable(): boolean {
+  return !!GOOGLE_API_KEY;
+}
 
 function getClient(): GoogleGenAI {
   if (client) return client;

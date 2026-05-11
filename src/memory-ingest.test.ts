@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('./gemini.js', () => ({
   generateContent: vi.fn(),
   parseJsonResponse: vi.fn(),
+  isGeminiAvailable: vi.fn(() => true),
 }));
 
 vi.mock('./db.js', () => ({

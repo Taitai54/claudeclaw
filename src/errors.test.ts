@@ -84,6 +84,15 @@ describe('classifyError', () => {
     expect(classified.recovery.shouldRetry).toBe(false);
   });
 
+  it('classifies session invalid errors', () => {
+    const err = new Error('No conversation found with session ID: 3cf078a8-75cd-444f-9b32-d5e827ea1875');
+    const classified = classifyError(err);
+    expect(classified.category).toBe('session_invalid');
+    expect(classified.recovery.shouldNewChat).toBe(true);
+    expect(classified.recovery.shouldRetry).toBe(false);
+    expect(classified.recovery.userMessage).toContain('Session expired');
+  });
+
   // ── Context exhaustion via exit code ────────────────────────────────
 
   it('classifies exit code 1 with context tokens as context_exhausted', () => {

@@ -15,6 +15,7 @@ export type ErrorCategory =
   | 'network'
   | 'billing'
   | 'overloaded'
+  | 'session_invalid'
   | 'unknown';
 
 export interface ErrorRecovery {
@@ -108,6 +109,13 @@ const CONTEXT_PATTERNS = [
   'max input tokens',
   'too long',
   'token limit',
+];
+
+const SESSION_PATTERNS = [
+  'no conversation found',
+  'session not found',
+  'invalid session',
+  'session expired',
 ];
 
 function matchesAny(text: string, patterns: string[]): boolean {
@@ -228,6 +236,16 @@ export function classifyError(err: unknown, contextTokens?: number): AgentError 
       shouldSwitchModel: false,
       retryAfterMs: 0,
       userMessage: 'Context window limit reached. Use /newchat to start fresh.',
+    }, raw);
+  }
+
+  if (matchesAny(text, SESSION_PATTERNS)) {
+    return new AgentError('session_invalid', {
+      shouldRetry: false,
+      shouldNewChat: true,
+      shouldSwitchModel: false,
+      retryAfterMs: 0,
+      userMessage: 'Session expired. Starting fresh...',
     }, raw);
   }
 

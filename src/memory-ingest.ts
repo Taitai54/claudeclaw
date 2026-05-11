@@ -1,4 +1,4 @@
-import { generateContent, parseJsonResponse } from './gemini.js';
+import { generateContent, parseJsonResponse, isGeminiAvailable } from './gemini.js';
 import { cosineSimilarity, embedText } from './embeddings.js';
 import { getMemoriesWithEmbeddings, saveStructuredMemory, saveMemoryEmbedding } from './db.js';
 import { logger } from './logger.js';
@@ -74,6 +74,9 @@ export async function ingestConversationTurn(
   assistantResponse: string,
   agentId = 'main',
 ): Promise<boolean> {
+  // Bail out early if Gemini is not configured
+  if (!isGeminiAvailable()) return false;
+
   // Hard filter: skip very short messages and commands
   if (userMessage.length <= 15 || userMessage.startsWith('/')) return false;
 

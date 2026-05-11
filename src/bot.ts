@@ -756,6 +756,13 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
         { category: err.category, recovery: err.recovery },
         'Agent error (classified)',
       );
+
+      // Clear invalid session if needed
+      if (err.category === 'session_invalid') {
+        clearSession(chatIdStr, AGENT_ID);
+        logger.info({ chatId: chatIdStr, agentId: AGENT_ID }, 'Cleared invalid session');
+      }
+
       await ctx.reply(err.recovery.userMessage);
     } else {
       logger.error({ err }, 'Agent error (unclassified)');
