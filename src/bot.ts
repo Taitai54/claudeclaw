@@ -30,7 +30,7 @@ import {
   HOURLY_TOKEN_BUDGET,
   PROJECT_ROOT,
 } from './config.js';
-import { clearSession, getRecentConversation, getRecentMemories, getRecentTaskOutputs, getSession, getSessionConversation, logToHiveMind, pinMemory, unpinMemory, setSession, lookupWaChatId, saveWaMessageMap, saveTokenUsage, saveCompactionEvent, getCompactionCount } from './db.js';
+import { clearSession, getRecentConversation, getRecentMemories, getRecentTaskOutputs, getSession, getSessionConversation, logConversationTurn, logToHiveMind, pinMemory, unpinMemory, setSession, lookupWaChatId, saveWaMessageMap, saveTokenUsage, saveCompactionEvent, getCompactionCount } from './db.js';
 import { logger } from './logger.js';
 import { downloadMedia, buildPhotoMessage, buildDocumentMessage, buildVideoMessage } from './media.js';
 import { buildMemoryContext, evaluateMemoryRelevance, saveConversationTurn, shouldNudgeMemory, MEMORY_NUDGE_TEXT } from './memory.js';
@@ -53,6 +53,7 @@ import {
   getSecurityStatus,
   audit,
 } from './security.js';
+import { fetchOpenRouterModels, callOpenRouter, OpenRouterMessage } from './openrouter.js';
 
 // ── Streaming rate limiter ───────────────────────────────────────────
 const globalStreamLastEdit = new Map<string, number>();
@@ -122,12 +123,22 @@ const voiceEnabledChats = new Set<string>();
 // When not set, uses CLI default (Opus via Max/OAuth)
 const chatModelOverride = new Map<string, string>();
 
-const AVAILABLE_MODELS: Record<string, string> = {
+// Base Anthropic models
+const BASE_MODELS: Record<string, string> = {
   opus: 'claude-opus-4-6',
   sonnet: 'claude-sonnet-4-5',
   haiku: 'claude-haiku-4-5',
 };
+
+let AVAILABLE_MODELS: Record<string, string> = { ...BASE_MODELS };
 const DEFAULT_MODEL_LABEL = 'opus';
+
+// Load OpenRouter models on startup
+(async () => {
+  const or = await fetchOpenRouterModels();
+  AVAILABLE_MODELS = { ...BASE_MODELS, ...or };
+  logger.info({ total: Object.keys(AVAILABLE_MODELS).length }, 'Models loaded');
+})().catch(err => logger.error({ err }, 'OpenRouter model fetch failed'));
 
 export function setMainModelOverride(model: string): void {
   if (ALLOWED_CHAT_ID) chatModelOverride.set(ALLOWED_CHAT_ID, model);
@@ -576,20 +587,72 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
       }
     } : undefined;
 
-    const result = await runAgentWithRetry(
-      fullMessage,
-      sessionId,
-      () => void sendTyping(ctx.api, chatId),
-      onProgress,
-      effectiveModel,
-      abortCtrl,
-      onStreamText,
-      (attempt, error) => {
-        void ctx.reply(`${error.recovery.userMessage} (retry ${attempt}/${2})`).catch(() => {});
-      },
-      MODEL_FALLBACK_CHAIN.length > 0 ? MODEL_FALLBACK_CHAIN : undefined,
-      agentMcpAllowlist,
-    );
+    // Route to OpenRouter if model contains '/' (e.g. "anthropic/claude-3.5-sonnet")
+    const isOpenRouterModel = effectiveModel.includes('/');
+    let result: { text: string | null; newSessionId: string | undefined; usage: UsageInfo | null; aborted?: boolean };
+
+    if (isOpenRouterModel) {
+      logger.info({ model: effectiveModel }, 'Routing to OpenRouter');
+      try {
+        const history = sessionId ? getSessionConversation(sessionId, 20) : [];
+        const messages: OpenRouterMessage[] = [
+          { role: 'system', content: agentSystemPrompt || 'You are a helpful assistant.' },
+          ...history.map(t => ({ role: t.role as 'user' | 'assistant', content: t.content })),
+          { role: 'user', content: fullMessage },
+        ];
+
+        const { text, usage } = await callOpenRouter(effectiveModel, messages, abortCtrl.signal);
+
+        // Persist conversation
+        const orSessionId = sessionId || `or-${chatIdStr}-${Date.now()}`;
+        logConversationTurn(chatIdStr, 'user', fullMessage, orSessionId, AGENT_ID);
+        logConversationTurn(chatIdStr, 'assistant', text, orSessionId, AGENT_ID);
+
+        result = {
+          text,
+          newSessionId: orSessionId,
+          usage: {
+            inputTokens: usage.prompt_tokens,
+            outputTokens: usage.completion_tokens,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            didCompact: false,
+            preCompactTokens: null,
+            lastCallCacheRead: 0,
+            lastCallInputTokens: usage.prompt_tokens,
+          },
+        };
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        clearInterval(typingInterval);
+        setProcessing(chatIdStr, false);
+        setActiveAbort(chatIdStr, null);
+
+        if (error.name === 'AbortError') {
+          await ctx.reply('Stopped.');
+          return;
+        }
+
+        logger.error({ error, model: effectiveModel }, 'OpenRouter error');
+        await ctx.reply(`OpenRouter error: ${error.message}`);
+        return;
+      }
+    } else {
+      result = await runAgentWithRetry(
+        fullMessage,
+        sessionId,
+        () => void sendTyping(ctx.api, chatId),
+        onProgress,
+        effectiveModel,
+        abortCtrl,
+        onStreamText,
+        (attempt, error) => {
+          void ctx.reply(`${error.recovery.userMessage} (retry ${attempt}/${2})`).catch(() => {});
+        },
+        MODEL_FALLBACK_CHAIN.length > 0 ? MODEL_FALLBACK_CHAIN : undefined,
+        agentMcpAllowlist,
+      );
+    }
 
     clearTimeout(timeoutId);
     setActiveAbort(chatIdStr, null);
