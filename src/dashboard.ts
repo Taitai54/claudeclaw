@@ -65,7 +65,7 @@ import {
   suggestBotNames,
   isAgentRunning,
 } from './agent-create.js';
-import { processMessageFromDashboard } from './bot.js';
+import { processMessageFromDashboard, getAvailableModels } from './bot.js';
 import { getDashboardHtml } from './dashboard-html.js';
 import { getWarRoomHtml } from './warroom-html.js';
 import { WARROOM_ENABLED, WARROOM_PORT } from './config.js';
@@ -1090,8 +1090,14 @@ export function startDashboard(botApi?: Api<RawApi>): void {
     const model = body?.model?.trim();
     if (!model) return c.json({ error: 'model required' }, 400);
 
-    const validModels = ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5'];
-    if (!validModels.includes(model)) return c.json({ error: `Invalid model. Valid: ${validModels.join(', ')}` }, 400);
+    // Dynamically validate against available models (Claude + OpenRouter)
+    const availableModels = getAvailableModels();
+    const allValidModels = Object.values(availableModels);
+    if (!allValidModels.includes(model)) {
+      return c.json({
+        error: `Invalid model. Valid models: ${allValidModels.slice(0, 10).join(', ')}${allValidModels.length > 10 ? '...' : ''}`
+      }, 400);
+    }
 
     try {
       if (agentId === 'main') {

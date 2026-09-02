@@ -35,9 +35,15 @@ export interface OpenRouterResponse {
   model: string;
 }
 
+export interface ModelWithPrice {
+  id: string;
+  alias: string;
+  promptCost: number;
+}
+
 /**
  * Fetch available models from OpenRouter API.
- * Returns a map of display names to model IDs.
+ * Returns array of models sorted by price (cheapest first), plus a map for lookup.
  */
 export async function fetchOpenRouterModels(): Promise<Record<string, string>> {
   const secrets = readEnvFile(['OPENROUTER_API_KEY']);
@@ -90,6 +96,68 @@ export async function fetchOpenRouterModels(): Promise<Record<string, string>> {
   } catch (error) {
     logger.error({ error }, 'Error fetching OpenRouter models');
     return {};
+  }
+}
+
+/**
+ * Fetch OpenRouter models with pricing and return the cheapest one.
+ */
+export async function getCheapestOpenRouterModel(): Promise<{ id: string; alias: string } | null> {
+  const secrets = readEnvFile(['OPENROUTER_API_KEY']);
+  if (!secrets.OPENROUTER_API_KEY) {
+    logger.warn('OPENROUTER_API_KEY not found, skipping cheapest model lookup');
+    return null;
+  }
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: {
+        'Authorization': `Bearer ${secrets.OPENROUTER_API_KEY}`,
+      },
+    });
+
+    if (!response.ok) {
+      logger.error({ status: response.status }, 'Failed to fetch OpenRouter models for pricing');
+      return null;
+    }
+
+    const data = await response.json() as { data: OpenRouterModel[] };
+    const modelsWithPrice: ModelWithPrice[] = [];
+
+    for (const model of data.data) {
+      if (model.id.includes('preview') || model.id.includes('deprecated')) continue;
+
+      const promptCost = parseFloat(model.pricing.prompt);
+      if (isNaN(promptCost)) continue;
+
+      const parts = model.id.split('/');
+      if (parts.length === 2) {
+        const [provider, modelName] = parts;
+        const shortName = modelName
+          .replace('claude-', '')
+          .replace('gemini-', 'gemini-')
+          .replace('gpt-', 'gpt')
+          .replace('-preview', '')
+          .replace('-latest', '');
+
+        const alias = `or-${provider.slice(0, 4)}-${shortName}`.slice(0, 30);
+        modelsWithPrice.push({ id: model.id, alias, promptCost });
+      }
+    }
+
+    // Sort by prompt cost, pick cheapest
+    modelsWithPrice.sort((a, b) => a.promptCost - b.promptCost);
+    const cheapest = modelsWithPrice[0];
+
+    if (cheapest) {
+      logger.info({ model: cheapest.id, cost: cheapest.promptCost }, 'Found cheapest OpenRouter model');
+      return { id: cheapest.id, alias: cheapest.alias };
+    }
+
+    return null;
+  } catch (error) {
+    logger.error({ error }, 'Error fetching cheapest OpenRouter model');
+    return null;
   }
 }
 

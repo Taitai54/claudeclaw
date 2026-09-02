@@ -53,7 +53,36 @@ import {
   getSecurityStatus,
   audit,
 } from './security.js';
-import { fetchOpenRouterModels, callOpenRouter, OpenRouterMessage } from './openrouter.js';
+import { fetchOpenRouterModels, callOpenRouter, OpenRouterMessage, getCheapestOpenRouterModel } from './openrouter.js';
+
+// ── Main agent config persistence ────────────────────────────────────
+const MAIN_CONFIG_FILE = path.resolve(PROJECT_ROOT, 'store', 'main-config.json');
+
+interface MainConfig {
+  model?: string;
+}
+
+function loadMainConfig(): MainConfig {
+  try {
+    if (fs.existsSync(MAIN_CONFIG_FILE)) {
+      const content = fs.readFileSync(MAIN_CONFIG_FILE, 'utf-8');
+      return JSON.parse(content);
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to load main-config.json');
+  }
+  return {};
+}
+
+function saveMainConfig(config: MainConfig): void {
+  try {
+    const dir = path.dirname(MAIN_CONFIG_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(MAIN_CONFIG_FILE, JSON.stringify(config, null, 2));
+  } catch (err) {
+    logger.error({ err }, 'Failed to save main-config.json');
+  }
+}
 
 // ── Streaming rate limiter ───────────────────────────────────────────
 const globalStreamLastEdit = new Map<string, number>();
@@ -119,8 +148,7 @@ import { getWaChats, getWaChatMessages, sendWhatsAppMessage, WaChat } from './wh
 // Per-chat voice mode toggle (in-memory, resets on restart)
 const voiceEnabledChats = new Set<string>();
 
-// Per-chat model override (in-memory, resets on restart)
-// When not set, uses CLI default (Opus via Max/OAuth)
+// Per-chat model override (in-memory, resets on restart unless persisted)
 const chatModelOverride = new Map<string, string>();
 
 // Base Anthropic models
@@ -131,17 +159,59 @@ const BASE_MODELS: Record<string, string> = {
 };
 
 let AVAILABLE_MODELS: Record<string, string> = { ...BASE_MODELS };
-const DEFAULT_MODEL_LABEL = 'opus';
+let DEFAULT_MODEL = 'claude-opus-4-6';
+let DEFAULT_MODEL_LABEL = 'opus';
+let persistedMainModel: string | undefined;
 
-// Load OpenRouter models on startup
+// Load persisted model config SYNCHRONOUSLY at startup
+// This ensures it's available before the first message arrives
+{
+  const mainConfig = loadMainConfig();
+  if (mainConfig.model) {
+    persistedMainModel = mainConfig.model;
+    DEFAULT_MODEL = mainConfig.model;
+    // Extract a short label from the model ID for display
+    DEFAULT_MODEL_LABEL = mainConfig.model.split('/').pop() || mainConfig.model;
+    if (ALLOWED_CHAT_ID) chatModelOverride.set(ALLOWED_CHAT_ID, mainConfig.model);
+    logger.info({ model: mainConfig.model }, 'Loaded persisted model override at startup');
+  }
+}
+
+// Load OpenRouter models in background and update defaults
 (async () => {
-  const or = await fetchOpenRouterModels();
-  AVAILABLE_MODELS = { ...BASE_MODELS, ...or };
-  logger.info({ total: Object.keys(AVAILABLE_MODELS).length }, 'Models loaded');
-})().catch(err => logger.error({ err }, 'OpenRouter model fetch failed'));
+  try {
+    const or = await fetchOpenRouterModels();
+    AVAILABLE_MODELS = { ...BASE_MODELS, ...or };
+    logger.info({ total: Object.keys(AVAILABLE_MODELS).length }, 'Models loaded from OpenRouter');
+
+    // Only discover cheapest if no persisted override
+    if (!persistedMainModel) {
+      const cheapest = await getCheapestOpenRouterModel();
+      if (cheapest) {
+        DEFAULT_MODEL = cheapest.id;
+        DEFAULT_MODEL_LABEL = cheapest.alias;
+        const config: MainConfig = { model: cheapest.id };
+        saveMainConfig(config);
+        logger.info({ model: cheapest.id, alias: cheapest.alias }, 'Auto-set default to cheapest OpenRouter model');
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, 'Failed to fetch OpenRouter models');
+  }
+})().catch(err => logger.error({ err }, 'Async model initialization failed'));
 
 export function setMainModelOverride(model: string): void {
-  if (ALLOWED_CHAT_ID) chatModelOverride.set(ALLOWED_CHAT_ID, model);
+  if (ALLOWED_CHAT_ID) {
+    chatModelOverride.set(ALLOWED_CHAT_ID, model);
+    persistedMainModel = model;
+    const config: MainConfig = { model };
+    saveMainConfig(config);
+    logger.info({ model }, 'Main model override set and persisted');
+  }
+}
+
+export function getAvailableModels(): Record<string, string> {
+  return AVAILABLE_MODELS;
 }
 
 // WhatsApp state per Telegram chat
@@ -508,7 +578,7 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
   const userModel = chatModelOverride.get(chatIdStr) ?? agentDefaultModel;
   const effectiveModel = (SMART_ROUTING_ENABLED && !userModel && classifyMessageComplexity(message) === 'simple')
     ? SMART_ROUTING_CHEAP_MODEL
-    : (userModel ?? 'claude-opus-4-6');
+    : (userModel ?? DEFAULT_MODEL);
 
   // Start typing immediately, then refresh on interval
   await sendTyping(ctx.api, chatId);
@@ -1084,7 +1154,7 @@ export function createBot(): Bot {
     }
   });
 
-  // /model — switch Claude model (opus, sonnet, haiku)
+  // /model — switch model (opus, sonnet, haiku, or OpenRouter alias)
   bot.command('model', async (ctx) => {
     if (await replyIfLocked(ctx)) return;
     const chatIdStr = ctx.chat!.id.toString();
@@ -1100,9 +1170,12 @@ export function createBot(): Bot {
       return;
     }
 
-    if (arg === 'reset' || arg === 'default' || arg === 'opus') {
+    if (arg === 'reset' || arg === 'default') {
       chatModelOverride.delete(chatIdStr);
-      await ctx.reply('Model reset to default (opus)');
+      persistedMainModel = undefined;
+      const config: MainConfig = {};
+      saveMainConfig(config);
+      await ctx.reply(`Model reset to default (${DEFAULT_MODEL_LABEL})`);
       return;
     }
 
@@ -1113,6 +1186,9 @@ export function createBot(): Bot {
     }
 
     chatModelOverride.set(chatIdStr, modelId);
+    persistedMainModel = modelId;
+    const config: MainConfig = { model: modelId };
+    saveMainConfig(config);
     await ctx.reply(`Model changed: ${arg} (${modelId})`);
   });
 
