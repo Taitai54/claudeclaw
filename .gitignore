@@ -32,6 +32,7 @@ migrations/.applied.json
 .idea/
 *.swp
 .wwebjs_cache/
+chrome_profile_notebooklm/
 
 # Personal scripts — not for sharing
 scripts/waste-reminder.sh
